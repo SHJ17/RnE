@@ -1,0 +1,125 @@
+import imageio
+import imgaug as ia
+from imgaug.augmentables.bbs import BoundingBox, BoundingBoxesOnImage
+import os
+import shutil
+import cv2
+from imgaug import augmenters as iaa
+from PIL import Image
+import random
+import numpy as np
+ia.seed(1)
+random.seed()
+
+# random 하게 바꿀 값들
+vari = [0.5, 0.1, 0.5, 0.8, 1.2, 0.8, 1.2, -0.2, 0.2, -0.2, 0.2, -25, 25, -8, 8]
+# flip_var = 0.5
+# crop_var = 0.1
+# gaussian_var = 0.5
+# affine_xmin = 0.8
+# affine_xmax = 1.2
+# affine_ymin = 0.8
+# affine_ymax = 1.2
+# trans_x_min = -0.2
+# trans_x_max = 0.2
+# trans_y_min = -0.2
+# trans_y_max = 0.2
+# rot_min = -25
+# rot_max = 25
+# shear_min = -8
+# shear_max = 8
+
+
+def vari_reset():
+    global vari
+    vari = [0.5, 0.1, 0.5, 0.8, 1.2, 0.8, 1.2, -0.2, 0.2, -0.2, 0.2, -25, 25, -8, 8]
+
+
+aug_num = 2 # 몇 배로 이미지 증강할 것인지
+
+for k in range(aug_num - 1):
+    vari_reset()
+    for l in range(15):
+        how = random.uniform(-0.2, 0.2)
+        vari[l] *= 1 + how
+
+    # Augmentation Sequence 지정
+    seq = iaa.Sequential([
+        iaa.Fliplr(vari[0]), # horizontal flips
+        iaa.Crop(percent=(0, vari[1])), # random crops
+        # Small gaussian blur with random sigma between 0 and 0.5.
+        # But we only blur about 50% of all images.
+        iaa.Sometimes(
+            0.5,
+            iaa.GaussianBlur(sigma=(0, vari[2]))
+        ),
+        # Strengthen or weaken the contrast in each image.
+        iaa.LinearContrast((0.75, 1.5)),
+        # Add gaussian noise.
+        # For 50% of all images, we sample the noise once per pixel.
+        # For the other 50% of all images, we sample the noise per pixel AND
+        # channel. This can change the color (not only brightness) of the
+        # pixels.
+        iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5),
+        # Make some images brighter and some darker.
+        # In 20% of all cases, we sample the multiplier once per channel,
+        # which can end up changing the color of the images.
+        iaa.Multiply((0.8, 1.2), per_channel=0.2),
+        # Apply affine transformations to each image.
+        # Scale/zoom them, translate/move them, rotate them and shear them.
+        iaa.Affine(
+            scale={"x": (vari[3], vari[4]), "y": (vari[5], vari[6])},
+            translate_percent={"x": (vari[7], vari[8]), "y": (vari[9], vari[10])},
+            rotate=(vari[11], vari[12]),
+            shear=(vari[13], vari[14])
+        )
+    ], random_order=True) # apply augmenters in random order
+
+    for i in os.listdir("/home/q/YOLOv7/yolov7/train/images"):
+        img_path = "/home/q/YOLOv7/yolov7/train/images/" + i
+        label_path = "/home/q/YOLOv7/yolov7/train/labels/" + i.replace("jpg", "txt").replace("JPG", "txt").replace("jpeg", "txt").replace("png", "txt")
+
+        image = imageio.imread(img_path)
+        # image = ia.imresize_single_image(image, (298, 447))
+
+        f = open(label_path)
+        lines = f.readlines()
+        bounding_box = []
+        for j in lines:
+            obj_class, x, y, width, height = j.replace('\n', '').split(' ')
+            X1 = float(x) - float(width) / 2
+            X2 = float(x) + float(width) / 2
+            Y2 = float(y) + float(height) / 2
+            Y1 = float(y) - float(height) / 2
+
+            # bounding_box.append(BoundingBox(x1=float(X1)*447, x2=float(X2)*447, y1=float(Y1)*298, y2=float(Y2)*298))
+            bounding_box.append(BoundingBox(x1=X1*image.shape[1], x2=X2*image.shape[1], y1=Y1*image.shape[0], y2=Y2*image.shape[0]))
+
+        bbs = BoundingBoxesOnImage(bounding_box, shape=image.shape)
+
+        # ia.imshow(bbs.draw_on_image(image, size=2))
+
+        # Image and Bounding Box Augmentation
+        image_aug, bbs_aug = seq(image=image, bounding_boxes=bbs)
+        # ia.imshow(bbs_aug.draw_on_image(image_aug, size=2))
+
+        # Saving augmented images and labels
+        data = Image.fromarray(image_aug)
+        data.save(i)
+        shutil.move(i, "/home/q/aug_images4/" + i.strip(".jpg").strip(".JPG").strip(".jpeg").strip(".png") + "y" + ".jpg")
+
+        f = open(i.replace("jpg", "txt"), 'w')
+        for j in range(len(bbs.bounding_boxes)):
+            after = bbs_aug.bounding_boxes[j]
+            after_width = (after.x2 - after.x1) / image.shape[1]
+            after_height = (after.y2 - after.y1) / image.shape[0]
+            after_x = ((after.x1 + after.x2) / 2) / image.shape[1]
+            after_y = ((after.y1 + after.y2) / 2) / image.shape[0]
+
+            content = '{0} {1} {2} {3} {4}\n'.format(
+                obj_class, after_x, after_y, after_width, after_height)
+            f.write(content)
+
+        f.close()
+        shutil.move(i.replace("jpg", "txt"), "/home/q/aug_labels4/" + i.strip(".jpg").strip(".JPG").strip(".jpeg").strip(".png") + "y" + ".txt")
+
